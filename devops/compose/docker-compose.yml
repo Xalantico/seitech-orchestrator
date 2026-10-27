@@ -1,0 +1,465 @@
+# Core stack: everything needed to run the Orquestador locally with production-shaped topology.
+#   docker compose -f compose/docker-compose.yml [-f compose/docker-compose.observability.yml ...] up -d
+name: orquestador
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+x-node-env: &node-env
+  APP_ENV: ${APP_ENV:-dev}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  VAULT_ADDR: http://vault:8200
+  VAULT_TOKEN_FILE: /bootstrap/app-token
+  TEMPORAL_ADDRESS: temporal:7233
+  TEMPORAL_SIM_NAMESPACE: simulation
+  TEMPORAL_UI_ORIGIN: https://temporal.${DOMAIN}:${HTTPS_PORT}
+  S3_ENDPOINT: http://minio:9000
+  S3_BUCKET_DOCUMENTS: orquestador-documents
+  SMTP_URL: smtp://mailpit:1025
+  MAIL_FROM: "Orquestador <no-reply@orquestador.local>"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  PUBLIC_BASE_URL: https://${DOMAIN}:${HTTPS_PORT}
+  # BI (Metabase signed embedding) and the optional copilot language model; blank means "not configured".
+  METABASE_SITE_URL: ${METABASE_SITE_URL:-}
+  METABASE_DASHBOARDS: ${METABASE_DASHBOARDS:-}
+  LLM_API_URL: ${LLM_API_URL:-}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+  LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
+  RETENTION_OPERATIONAL_YEARS: ${RETENTION_OPERATIONAL_YEARS:-5}
+
+networks:
+  edge: { name: orq-edge }
+  internal: { name: orq-internal }
+
+volumes:
+  pgdata: {}
+  redis-data: {}
+  minio-data: {}
+  vault-data: {}
+  vault-bootstrap: {}
+  clamav-db: {}
+
+services:
+  # ───────────────────────────── edge ─────────────────────────────
+  traefik:
+    image: traefik:v3.2
+    <<: [*restart, *logging]
+    command: ["--configFile=/etc/traefik/traefik.yml"]
+    ports:
+      - "${HTTP_PORT:-8088}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ../config/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ../config/traefik/dynamic:/etc/traefik/dynamic:ro
+      - ../certs:/certs:ro
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping.entrypoint=ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN}`)
+      - traefik.http.routers.traefik.entrypoints=websecure
+      - traefik.http.routers.traefik.service=api@internal
+      - traefik.http.routers.traefik.middlewares=local-only@file
+
+  # ───────────────────────────── data ─────────────────────────────
+  postgres:
+    build:
+      context: ../..
+      dockerfile: devops/docker/postgres.Dockerfile
+    image: orquestador/postgres:16
+    <<: [*restart, *logging]
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "hba_file=/etc/postgresql/pg_hba.conf"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      TEMPORAL_DB_PASSWORD: ${TEMPORAL_DB_PASSWORD}
+      METABASE_DB_PASSWORD: ${METABASE_DB_PASSWORD}
+      WALG_ENABLED: ${WALG_ENABLED:-true}
+      WALG_S3_PREFIX: s3://orquestador-backups/pg
+      AWS_ENDPOINT: http://minio:9000
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_REGION: eu-west-1
+      AWS_ACCESS_KEY_ID: ${WALG_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${WALG_S3_SECRET_KEY}
+      PGHOST: /var/run/postgresql
+      PGUSER: ${POSTGRES_SUPERUSER}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../config/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ../config/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ../config/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5440}:5432"
+    networks: [internal]
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER} -d orquestador"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    <<: [*restart, *logging]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes: [redis-data:/data]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:latest}
+    <<: [*restart, *logging]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+      MINIO_BROWSER_REDIRECT_URL: https://minio.${DOMAIN}:${HTTPS_PORT}
+    volumes: [minio-data:/data]
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=orq-edge
+      - traefik.http.routers.minio.rule=Host(`minio.${DOMAIN}`)
+      - traefik.http.routers.minio.entrypoints=websecure
+      - traefik.http.routers.minio.middlewares=local-only@file
+      - traefik.http.services.minio.loadbalancer.server.port=9001
+
+  minio-init:
+    image: ${MINIO_MC_IMAGE:-minio/mc:latest}
+    depends_on:
+      minio: { condition: service_healthy }
+    networks: [internal]
+    restart: "no"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      WALG_S3_ACCESS_KEY: ${WALG_S3_ACCESS_KEY}
+      WALG_S3_SECRET_KEY: ${WALG_S3_SECRET_KEY}
+    volumes:
+      - ../scripts/minio-init.sh:/minio-init.sh:ro
+    entrypoint: ["/bin/sh", "/minio-init.sh"]
+
+  clamav:
+    image: ${CLAMAV_IMAGE:-clamav/clamav-debian:1.4}
+    <<: [*restart, *logging]
+    volumes: [clamav-db:/var/lib/clamav]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    <<: [*restart, *logging]
+    networks: [edge, internal]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=orq-edge
+      - traefik.http.routers.mailpit.rule=Host(`mail.${DOMAIN}`)
+      - traefik.http.routers.mailpit.entrypoints=websecure
+      - traefik.http.routers.mailpit.middlewares=local-only@file
+      - traefik.http.services.mailpit.loadbalancer.server.port=8025
+
+  # ───────────────────────────── secrets + identity ─────────────────────────────
+  vault:
+    image: hashicorp/vault:1.18
+    <<: [*restart, *logging]
+    command: ["server", "-config=/etc/vault/vault.hcl"]
+    cap_add: [IPC_LOCK]
+    volumes:
+      - vault-data:/vault/file
+      - ../config/vault/vault.hcl:/etc/vault/vault.hcl:ro
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+    networks: [edge, internal]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=orq-edge
+      - traefik.http.routers.vault.rule=Host(`vault.${DOMAIN}`)
+      - traefik.http.routers.vault.entrypoints=websecure
+      - traefik.http.routers.vault.middlewares=local-only@file
+      - traefik.http.services.vault.loadbalancer.server.port=8200
+
+  vault-init:
+    build:
+      context: ../..
+      dockerfile: devops/docker/vault-init.Dockerfile
+    image: orquestador/vault-init:1
+    <<: [*restart, *logging]
+    depends_on: [vault]
+    entrypoint: ["/bin/sh", "/vault-bootstrap.sh"]
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      VAULT_ADDR: http://vault:8200
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      KC_WEB_CLIENT_SECRET: ${KC_WEB_CLIENT_SECRET}
+      KC_API_ADMIN_SECRET: ${KC_API_ADMIN_SECRET}
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET}
+      MOCK_API_TOKEN: ${MOCK_API_TOKEN}
+      DOWNLOAD_LINK_SECRET: ${DOWNLOAD_LINK_SECRET}
+      METABASE_EMBEDDING_SECRET: ${METABASE_EMBEDDING_SECRET}
+    volumes:
+      - vault-bootstrap:/bootstrap
+      - ../scripts/vault-bootstrap.sh:/vault-bootstrap.sh:ro
+      - ../config/vault/policies:/policies:ro
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/bootstrap/ready"]
+      interval: 3s
+      timeout: 2s
+      retries: 60
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    <<: [*restart, *logging]
+    command: ["start", "--import-realm"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_HOSTNAME: https://auth.${DOMAIN}:${HTTPS_PORT}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      KC_LOG_LEVEL: INFO
+      KC_LOG_CONSOLE_OUTPUT: json
+      JAVA_OPTS_KC_HEAP: "-XX:MaxRAMPercentage=60"
+      DOMAIN: ${DOMAIN}
+      HTTPS_PORT: ${HTTPS_PORT}
+      KC_WEB_CLIENT_SECRET: ${KC_WEB_CLIENT_SECRET}
+      KC_API_ADMIN_SECRET: ${KC_API_ADMIN_SECRET}
+      KC_SERVICE_CLIENT_SECRET: ${KC_SERVICE_CLIENT_SECRET}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD}
+    volumes:
+      - ../config/keycloak/orquestador-realm.json:/opt/keycloak/data/import/orquestador-realm.json:ro
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nhost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=orq-edge
+      - traefik.http.routers.keycloak.rule=Host(`auth.${DOMAIN}`)
+      - traefik.http.routers.keycloak.entrypoints=websecure
+      - traefik.http.services.keycloak.loadbalancer.server.port=8080
+
+  # ───────────────────────────── workflow engine ─────────────────────────────
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    <<: [*restart, *logging]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD}
+      DBNAME: temporal
+      SKIP_DB_CREATE: "true"
+      VISIBILITY_DBNAME: temporal_visibility
+      DEFAULT_NAMESPACE: default
+      DEFAULT_NAMESPACE_RETENTION: 30d
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development.yaml
+      PROMETHEUS_ENDPOINT: 0.0.0.0:9090
+    volumes:
+      - ../config/temporal/development.yaml:/etc/temporal/config/dynamicconfig/development.yaml:ro
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health | grep -q SERVING"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  temporal-init:
+    image: temporalio/admin-tools:1.25.2-tctl-1.18.1-cli-1.1.1
+    depends_on:
+      temporal: { condition: service_healthy }
+    restart: "no"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    networks: [internal]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        temporal operator namespace describe simulation >/dev/null 2>&1 || temporal operator namespace create simulation --retention 7d
+        echo namespaces ready
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    <<: [*restart, *logging]
+    depends_on:
+      temporal: { condition: service_healthy }
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: https://${DOMAIN}:${HTTPS_PORT}
+    networks: [edge, internal]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=orq-edge
+      - traefik.http.routers.temporal.rule=Host(`temporal.${DOMAIN}`)
+      - traefik.http.routers.temporal.entrypoints=websecure
+      - traefik.http.routers.temporal.middlewares=local-only@file
+      - traefik.http.services.temporal.loadbalancer.server.port=8080
+
+  # ───────────────────────────── application ─────────────────────────────
+  migrate:
+    build:
+      context: ../..
+      dockerfile: devops/docker/node.Dockerfile
+      args: { APP: api, GIT_SHA: "${GIT_SHA:-local}" }
+    image: orquestador/api:${GIT_SHA:-local}
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+    working_dir: /repo/packages/db
+    command: ["sh", "-c", "node_modules/.bin/tsx src/cli.ts migrate && node_modules/.bin/tsx src/cli.ts seed"]
+    environment:
+      MIGRATION_DATABASE_URL: postgres://${POSTGRES_SUPERUSER}:${POSTGRES_PASSWORD}@postgres:5432/orquestador
+      APP_DB_ROLE: orq_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      BI_DB_ROLE: bi_reader
+      BI_DB_PASSWORD: ${BI_DB_PASSWORD}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL}
+    networks: [internal]
+
+  api:
+    build:
+      context: ../..
+      dockerfile: devops/docker/node.Dockerfile
+      args: { APP: api, GIT_SHA: "${GIT_SHA:-local}" }
+    image: orquestador/api:${GIT_SHA:-local}
+    <<: [*restart, *logging]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      vault-init: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+      temporal: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+    environment:
+      <<: *node-env
+      API_HOST: 0.0.0.0
+      API_PORT: 3001
+      WEB_ORIGIN: https://${DOMAIN}:${HTTPS_PORT}
+      AUTH_MODE: oidc
+      OIDC_ISSUER: https://auth.${DOMAIN}:${HTTPS_PORT}/realms/orquestador
+      OIDC_DISCOVERY_URL: http://keycloak:8080/realms/orquestador/.well-known/openid-configuration
+      OIDC_CLIENT_ID: orquestador-web
+      OIDC_AUDIENCE: orquestador-web
+      OIDC_ASSUME_MFA: "true"
+      KEYCLOAK_ADMIN_URL: http://keycloak:8080/admin/realms/orquestador
+      KEYCLOAK_ADMIN_CLIENT_ID: orquestador-api-admin
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL}
+      CLAMAV_HOST: clamav
+      APP_DB_ROLE: orq_app
+      RUN_MIGRATIONS_ON_START: "false"
+    networks: [edge, internal]
+    volumes:
+      - vault-bootstrap:/bootstrap:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/readyz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=orq-edge
+      - traefik.http.routers.api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)
+      - traefik.http.routers.api.entrypoints=websecure
+      - traefik.http.routers.api.priority=100
+      - traefik.http.routers.api.middlewares=compress@file
+      - traefik.http.services.api.loadbalancer.server.port=3001
+      - traefik.http.services.api.loadbalancer.healthcheck.path=/healthz
+      - traefik.http.services.api.loadbalancer.healthcheck.interval=10s
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: devops/docker/node.Dockerfile
+      args: { APP: worker, ENTRY: src/worker.ts, GIT_SHA: "${GIT_SHA:-local}" }
+    image: orquestador/worker:${GIT_SHA:-local}
+    <<: [*restart, *logging]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      vault-init: { condition: service_healthy }
+      temporal: { condition: service_healthy }
+      temporal-init: { condition: service_completed_successfully }
+    environment:
+      <<: *node-env
+      WORKER_QUEUES: flows,integrations,notifications,batch
+      METRICS_PORT: 9464
+      APP_DB_ROLE: orq_app
+    networks: [internal]
+    volumes:
+      - vault-bootstrap:/bootstrap:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9464/healthz >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+
+  web:
+    build:
+      context: ../..
+      dockerfile: devops/docker/web.Dockerfile
+    image: orquestador/web:${GIT_SHA:-local}
+    <<: [*restart, *logging]
+    networks: [edge]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=orq-edge
+      - traefik.http.routers.web.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.web.entrypoints=websecure
+      - traefik.http.routers.web.middlewares=compress@file
+      - traefik.http.services.web.loadbalancer.server.port=8080

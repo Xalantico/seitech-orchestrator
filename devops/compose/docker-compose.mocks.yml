@@ -1,0 +1,45 @@
+# Simulated external systems (HubSpot, Business Central, Navision, FSM, TASK, Euroconect, Eurocert, e-signature,
+# comms, DMS, CAE, portal, M365). The real systems are replaced by these until the customer provides sandboxes.
+#   docker compose -f compose/docker-compose.yml -f compose/docker-compose.mocks.yml up -d
+# The connectors installed at start point to this service; switching one to a real system is an admin change
+# (base URL + credentials in Vault), not a deployment.
+services:
+  mock-systems:
+    build:
+      context: ../..
+      dockerfile: devops/docker/node.Dockerfile
+      args: { APP: mock-systems, ENTRY: src/index.ts, GIT_SHA: "${GIT_SHA:-local}" }
+    image: orquestador/mock-systems:${GIT_SHA:-local}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    environment:
+      PORT: 4010
+      MOCK_API_TOKEN: ${MOCK_API_TOKEN}
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET}
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4010/healthz >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=orq-edge
+      - traefik.http.routers.mocks.rule=Host(`mocks.${DOMAIN}`)
+      - traefik.http.routers.mocks.entrypoints=websecure
+      - traefik.http.routers.mocks.middlewares=local-only@file
+      - traefik.http.services.mocks.loadbalancer.server.port=4010
+
+  # Same services as the core file; compose merges these keys.
+  api:
+    depends_on:
+      mock-systems: { condition: service_healthy }
+    environment:
+      MOCK_CONNECTORS_URL: http://mock-systems:4010
+
+  worker:
+    environment:
+      MOCK_CONNECTORS_URL: http://mock-systems:4010

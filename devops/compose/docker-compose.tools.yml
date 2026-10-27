@@ -1,0 +1,30 @@
+# Operator tooling: Metabase for BI dashboards (ORF-065/082).
+volumes:
+  metabase-data: {}
+
+services:
+  metabase:
+    image: metabase/metabase:v0.51.4
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase
+      MB_DB_PORT: 5432
+      MB_DB_USER: metabase
+      MB_DB_PASS: ${METABASE_DB_PASSWORD}
+      MB_DB_HOST: postgres
+      MB_SITE_URL: https://bi.${DOMAIN}:${HTTPS_PORT}
+      # Signed embedding: the API issues short-lived dashboard URLs with this key (ORF-053).
+      MB_EMBEDDING_SECRET_KEY: ${METABASE_EMBEDDING_SECRET}
+      MB_ENABLE_EMBEDDING: "true"
+      JAVA_OPTS: -Xmx1g
+    networks: [edge, internal]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=orq-edge
+      - traefik.http.routers.metabase.rule=Host(`bi.${DOMAIN}`)
+      - traefik.http.routers.metabase.entrypoints=websecure
+      - traefik.http.routers.metabase.middlewares=local-only@file
+      - traefik.http.services.metabase.loadbalancer.server.port=3000

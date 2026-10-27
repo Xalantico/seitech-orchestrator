@@ -1,0 +1,31 @@
+{
+  "name": "@orchestrador/connector-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Connector SDK and integration hub core: adapter contract, auth, HTTP client, JSON/XML/CSV/fixed-width codecs, versioned field mapping, inbound inbox and transactional outbox. Shared by the API and the worker.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@orchestrador/shared": "workspace:*",
+    "fast-xml-parser": "^4.5.1",
+    "cron-parser": "^4.9.0"
+  },
+  "devDependencies": {
+    "@orchestrador/db": "workspace:*",
+    "@types/node": "^22.13.10",
+    "@types/pg": "^8.11.11",
+    "pg": "^8.14.1",
+    "typescript": "~5.6.3",
+    "vitest": "^2.1.9"
+  }
+}

@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: orq-worker, labels: { app: orq-worker } }
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector: { matchLabels: { app: orq-worker } }
+  template:
+    metadata: { labels: { app: orq-worker } }
+    spec:
+      terminationGracePeriodSeconds: 120   # lets Temporal activities drain
+      securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "orq.image" (dict "root" . "name" "worker") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{ toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- include "orq.env" . | nindent 12 }}
+            - { name: WORKER_QUEUES, value: {{ .Values.worker.queues | quote }} }
+            - { name: METRICS_PORT, value: "9464" }
+          ports: [{ containerPort: 9464, name: metrics }]
+          resources: {{ toYaml .Values.worker.resources | nindent 12 }}
+---
+{{- if .Values.worker.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: orq-worker }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: orq-worker }
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  metrics: [{ type: Resource, resource: { name: cpu, target: { type: Utilization, averageUtilization: {{ .Values.worker.autoscaling.targetCPU }} } } }]
+{{- end }}

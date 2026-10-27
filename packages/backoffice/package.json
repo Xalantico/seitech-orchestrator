@@ -1,0 +1,26 @@
+{
+  "name": "@orchestrador/backoffice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Scheduled exports, threshold alerts, retention purge, GDPR export/erasure, signed download links and BI embedding. Shared by the API and the worker.",
+  "exports": {
+    ".": { "types": "./src/index.ts", "import": "./src/index.ts", "default": "./src/index.ts" }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@orchestrador/db": "workspace:*",
+    "@orchestrador/flowhost": "workspace:*",
+    "@orchestrador/reporting": "workspace:*",
+    "pg": "^8.14.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/pg": "^8.11.11",
+    "typescript": "~5.6.3",
+    "vitest": "^2.1.9"
+  }
+}

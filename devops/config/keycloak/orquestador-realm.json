@@ -1,0 +1,157 @@
+{
+  "realm": "orquestador",
+  "displayName": "Orquestador",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "rememberMe": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "verifyEmail": false,
+  "editUsernameAllowed": false,
+  "internationalizationEnabled": true,
+  "supportedLocales": ["es", "en", "ca"],
+  "defaultLocale": "es",
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "offlineSessionIdleTimeout": 2592000,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "maxDeltaTimeSeconds": 43200,
+  "passwordPolicy": "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and notEmail and passwordHistory(5) and forceExpiredPasswordChange(90)",
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none';",
+    "xContentTypeOptions": "nosniff",
+    "xFrameOptions": "SAMEORIGIN",
+    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+  },
+  "smtpServer": {
+    "host": "mailpit",
+    "port": "1025",
+    "from": "no-reply@orquestador.local",
+    "fromDisplayName": "Orquestador",
+    "ssl": "false",
+    "starttls": "false"
+  },
+  "requiredActions": [
+    { "alias": "CONFIGURE_TOTP", "name": "Configure OTP", "providerId": "CONFIGURE_TOTP", "enabled": true, "defaultAction": true, "priority": 10 },
+    { "alias": "UPDATE_PASSWORD", "name": "Update Password", "providerId": "UPDATE_PASSWORD", "enabled": true, "defaultAction": false, "priority": 20 }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "orq-user", "description": "Any authenticated Orquestador user" },
+      { "name": "orq-service", "description": "Machine-to-machine access (systems of record, mocks)" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "orquestador-web",
+      "name": "Orquestador (web + API BFF)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${KC_WEB_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "https://${DOMAIN}:${HTTPS_PORT}",
+      "baseUrl": "/",
+      "redirectUris": ["https://${DOMAIN}:${HTTPS_PORT}/api/v1/auth/callback"],
+      "webOrigins": ["https://${DOMAIN}:${HTTPS_PORT}"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://${DOMAIN}:${HTTPS_PORT}/*",
+        "access.token.lifespan": "900"
+      },
+      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "email"],
+      "protocolMappers": [
+        {
+          "name": "audience-orquestador",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "orquestador-web", "id.token.claim": "false", "access.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "clientId": "orquestador-api-admin",
+      "name": "Orquestador API (user administration)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${KC_API_ADMIN_SECRET}",
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "orquestador-service",
+      "name": "Service accounts (integrations calling the API)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${KC_SERVICE_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "audience-orquestador",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "orquestador-web", "access.token.claim": "true" }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-orquestador-api-admin",
+      "enabled": true,
+      "serviceAccountClientId": "orquestador-api-admin",
+      "clientRoles": { "realm-management": ["manage-users", "view-users", "query-users"] }
+    },
+    {
+      "username": "${BOOTSTRAP_ADMIN_EMAIL}",
+      "email": "${BOOTSTRAP_ADMIN_EMAIL}",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Admin",
+      "lastName": "Orquestador",
+      "credentials": [{ "type": "password", "value": "${BOOTSTRAP_ADMIN_PASSWORD}", "temporary": true }],
+      "realmRoles": ["orq-user"],
+      "requiredActions": ["UPDATE_PASSWORD", "CONFIGURE_TOTP"]
+    }
+  ],
+  "identityProviders": [
+    {
+      "alias": "azure-ad",
+      "displayName": "Microsoft (Azure AD / Entra ID)",
+      "providerId": "oidc",
+      "enabled": false,
+      "trustEmail": true,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "clientId": "REPLACE_WITH_ENTRA_APP_ID",
+        "clientSecret": "REPLACE_WITH_ENTRA_SECRET",
+        "authorizationUrl": "https://login.microsoftonline.com/REPLACE_TENANT_ID/oauth2/v2.0/authorize",
+        "tokenUrl": "https://login.microsoftonline.com/REPLACE_TENANT_ID/oauth2/v2.0/token",
+        "jwksUrl": "https://login.microsoftonline.com/REPLACE_TENANT_ID/discovery/v2.0/keys",
+        "issuer": "https://login.microsoftonline.com/REPLACE_TENANT_ID/v2.0",
+        "defaultScope": "openid profile email",
+        "pkceEnabled": "true",
+        "pkceMethod": "S256",
+        "syncMode": "FORCE"
+      }
+    }
+  ]
+}

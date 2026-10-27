@@ -1,0 +1,36 @@
+{
+  "name": "orchestrador",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.9.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "setup:env": "node -e \"const fs=require('fs'); if(!fs.existsSync('.env')) fs.copyFileSync('.env.example','.env');\"",
+    "dev:infra:up": "docker compose up -d",
+    "dev:infra:down": "docker compose down",
+    "db:migrate": "pnpm --filter @orchestrador/db migrate && pnpm --filter @orchestrador/db seed",
+    "db:seed-demo": "pnpm --filter @orchestrador/db seed:demo",
+    "infra:up": "make -C devops up",
+    "infra:down": "make -C devops down",
+    "infra:logs": "make -C devops logs",
+    "dev": "concurrently -k -n api,worker,web -c blue,magenta,green \"pnpm --filter @orchestrador/api dev\" \"pnpm --filter @orchestrador/worker dev\" \"pnpm --filter @orchestrador/web dev\"",
+    "dev:api": "pnpm --filter @orchestrador/api dev",
+    "dev:worker": "pnpm --filter @orchestrador/worker dev",
+    "dev:web": "pnpm --filter @orchestrador/web dev",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "lint": "eslint .",
+    "test": "pnpm -r --if-present test",
+    "build": "pnpm -r --if-present build",
+    "format:check": "echo 'no formatter configured'"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0",
+    "typescript": "~5.6.3",
+    "typescript-eslint": "^8.72.0"
+  }
+}

@@ -1,0 +1,74 @@
+# Backups to two sites (RNF-14..16): primary = MinIO "orquestador-backups", second site = minio-dr.
+# WAL segments are archived continuously by PostgreSQL itself (archive_command → WAL-G).
+volumes:
+  minio-dr-data: {}
+
+services:
+  minio-dr:
+    image: ${MINIO_IMAGE:-minio/minio:latest}
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes: [minio-dr-data:/data]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  walg-backup:
+    image: orquestador/postgres:16
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+      minio-dr: { condition: service_healthy }
+    user: postgres
+    entrypoint: ["/bin/bash", "/scripts/backup-loop.sh"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: postgres
+      PGUSER: ${POSTGRES_SUPERUSER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
+      WALG_S3_PREFIX: s3://orquestador-backups/pg
+      AWS_ENDPOINT: http://minio:9000
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_REGION: eu-west-1
+      AWS_ACCESS_KEY_ID: ${WALG_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${WALG_S3_SECRET_KEY}
+      DR_ENDPOINT: http://minio-dr:9000
+      DR_USER: ${MINIO_ROOT_USER}
+      DR_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      SRC_USER: ${MINIO_ROOT_USER}
+      SRC_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_RETAIN: ${BACKUP_RETAIN:-7}
+    volumes:
+      - pgdata:/var/lib/postgresql/data:ro
+      - ../scripts/backup-loop.sh:/scripts/backup-loop.sh:ro
+      - ../scripts/backup-now.sh:/scripts/backup-now.sh:ro
+    networks: [internal]
+
+  # `make restore-drill`: restores the latest backup into a throw-away instance and verifies it (not started by `up`).
+  restore-drill:
+    profiles: [drill]
+    image: orquestador/postgres:16
+    user: postgres
+    entrypoint: ["/bin/bash", "/scripts/restore-drill-inner.sh"]
+    environment:
+      PGUSER: ${POSTGRES_SUPERUSER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      WALG_S3_PREFIX: s3://orquestador-backups/pg
+      AWS_ENDPOINT: http://minio:9000
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_REGION: eu-west-1
+      AWS_ACCESS_KEY_ID: ${WALG_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${WALG_S3_SECRET_KEY}
+    volumes:
+      - ../scripts/restore-drill-inner.sh:/scripts/restore-drill-inner.sh:ro
+      - ../config/postgres:/etc/postgresql:ro
+    networks: [internal]

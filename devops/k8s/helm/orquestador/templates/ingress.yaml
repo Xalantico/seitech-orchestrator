@@ -1,0 +1,18 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: orquestador
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "60m"
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls: [{ hosts: [{{ .Values.global.domain | quote }}], secretName: {{ .Values.ingress.tlsSecretName }} }]
+  rules:
+    - host: {{ .Values.global.domain }}
+      http:
+        paths:
+          - { path: /api, pathType: Prefix, backend: { service: { name: orq-api, port: { number: 80 } } } }
+          - { path: /, pathType: Prefix, backend: { service: { name: orq-web, port: { number: 80 } } } }
+{{- end }}

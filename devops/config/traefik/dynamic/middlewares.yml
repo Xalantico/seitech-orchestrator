@@ -1,0 +1,22 @@
+http:
+  middlewares:
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: strict-origin-when-cross-origin
+        customResponseHeaders:
+          Server: ""
+          X-Powered-By: ""
+    ops-ratelimit:
+      rateLimit:
+        average: 100
+        burst: 200
+    compress:
+      compress: {}
+    # Operator consoles (Grafana, Vault, MinIO, Metabase) are local-only: require a LAN source.
+    local-only:
+      ipAllowList:
+        sourceRange: ["127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]

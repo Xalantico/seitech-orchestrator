@@ -1,0 +1,9 @@
+global:
+  appEnv: test
+  domain: orquestador-test.example.com
+config:
+  OIDC_ISSUER: https://auth-test.example.com/realms/orquestador
+  OIDC_DISCOVERY_URL: https://auth-test.example.com/realms/orquestador/.well-known/openid-configuration
+  VAULT_BASE_PATH: orquestador/test
+api: { replicas: 1, autoscaling: { enabled: false } }
+worker: { replicas: 1, autoscaling: { enabled: false } }

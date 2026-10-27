@@ -1,0 +1,22 @@
+{
+  "name": "@orchestrador/bpmn",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BPMN 2.0 import/export for Orquestador flow diagrams (ORF-020).",
+  "exports": {
+    ".": { "types": "./src/index.ts", "import": "./src/index.ts", "default": "./src/index.ts" }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@orchestrador/shared": "workspace:*",
+    "fast-xml-parser": "^4.5.1"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.3",
+    "vitest": "^2.1.9"
+  }
+}

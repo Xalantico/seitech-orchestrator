@@ -1,0 +1,36 @@
+{
+  "name": "@orchestrador/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "bin": {
+    "orq-db": "./src/cli.ts"
+  },
+  "scripts": {
+    "migrate": "tsx src/cli.ts migrate",
+    "seed": "tsx src/cli.ts seed",
+    "seed:demo": "tsx src/cli.ts seed-demo",
+    "verify-audit": "tsx src/cli.ts verify-audit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@orchestrador/shared": "workspace:*",
+    "pg": "^8.14.1",
+    "@orchestrador/rules": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/pg": "^8.11.11",
+    "tsx": "^4.19.3",
+    "typescript": "~5.6.3",
+    "vitest": "^2.1.9"
+  }
+}

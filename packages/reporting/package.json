@@ -1,0 +1,31 @@
+{
+  "name": "@orchestrador/reporting",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Entity registry, filter language and SQL compiler (lists, saved filters, drill-down, alerts) plus CSV/XLSX/PDF rendering for exports.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "pdfkit": "^0.15.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/pdfkit": "^0.13.9",
+    "typescript": "~5.6.3",
+    "vitest": "^2.1.9",
+    "@orchestrador/db": "workspace:*",
+    "pg": "^8.14.1",
+    "@types/pg": "^8.11.11"
+  }
+}

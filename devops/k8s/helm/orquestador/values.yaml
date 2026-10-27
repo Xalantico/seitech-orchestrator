@@ -1,0 +1,41 @@
+# Production values override these. Data services (PostgreSQL, Redis, Temporal, Keycloak, Vault, object store)
+# are expected to be managed services or separate charts; only the application tier lives here.
+image:
+  registry: ghcr.io/seitech
+  tag: ""            # defaults to .Chart.AppVersion; CI pins the immutable git SHA
+  pullPolicy: IfNotPresent
+global:
+  appEnv: prod
+  domain: orquestador.example.com
+api:
+  replicas: 3
+  port: 3001
+  resources: { requests: { cpu: 250m, memory: 384Mi }, limits: { cpu: "1", memory: 768Mi } }
+  autoscaling: { enabled: true, minReplicas: 3, maxReplicas: 10, targetCPU: 65 }
+worker:
+  replicas: 3
+  queues: "flows,integrations,notifications,batch"
+  resources: { requests: { cpu: 250m, memory: 384Mi }, limits: { cpu: "1", memory: 1Gi } }
+  autoscaling: { enabled: true, minReplicas: 3, maxReplicas: 20, targetCPU: 65 }
+web:
+  replicas: 2
+  resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 250m, memory: 128Mi } }
+config:
+  # Non-secret environment variables injected into api and worker.
+  TEMPORAL_ADDRESS: temporal-frontend.temporal.svc:7233
+  S3_ENDPOINT: https://s3.example.com
+  OIDC_ISSUER: https://auth.example.com/realms/orquestador
+  OIDC_DISCOVERY_URL: https://auth.example.com/realms/orquestador/.well-known/openid-configuration
+  OIDC_CLIENT_ID: orquestador-web
+  AUTH_MODE: oidc
+  VAULT_ADDR: https://vault.example.com
+# Secrets come from Vault (Kubernetes auth) or an ExternalSecret, never from this file.
+vault:
+  tokenSecretName: orquestador-vault-token
+  tokenSecretKey: token
+ingress:
+  enabled: true
+  className: nginx
+  tlsSecretName: orquestador-tls
+podSecurityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: { drop: ["ALL"] } }
